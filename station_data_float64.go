@@ -42,6 +42,26 @@ func (sdf *stationDataFloat64) ValuesOf(name string) values {
 	return v
 }
 
+func (sdf *stationDataFloat64) Merge(other stationData) {
+	switch o := other.(type) {
+	case *stationDataFloat64:
+		for name, vals := range o.data {
+			existing, exists := sdf.data[name]
+			if exists {
+				existing.max = max(existing.max, vals.max)
+				existing.min = min(existing.min, vals.min)
+				existing.sum += vals.sum
+				existing.count += vals.count
+			} else {
+				sdf.data[name] = vals
+			}
+		}
+	default:
+		panic("not supported")
+	}
+
+}
+
 type valuesFloat64 struct {
 	min   float64
 	max   float64

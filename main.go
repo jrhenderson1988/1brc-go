@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +18,7 @@ type stationData interface {
 	StationNames() []string
 	ConsumeLine(line []byte)
 	ValuesOf(name string) values
+	Merge(other stationData)
 }
 
 type values interface {
@@ -32,40 +33,24 @@ func main() {
 
 	start := time.Now()
 
-	//////////////////////////////////
-	//benchmarkFileRead()
-	//benchmarkBufioScanner()
-	//////////////////////////////////
-	const useInt64 = false
-	const useBufio = false
+	const useInt64 = true
 
-	execute("./measurements.txt", useBufio, useInt64, os.Stdout)
+	execute("./measurements.txt", useInt64, os.Stdout)
 
 	end := time.Now()
 	elapsed := end.Sub(start)
 	fmt.Printf("\n%s\n", elapsed)
 }
 
-func withBufferedScanner(path string, fn func(line []byte)) {
+func withFileReadParallel(path string, useInt64 bool) stationData {
 	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
-	scanner := makeScanner(f)
-	for scanner.Scan() {
-		fn(scanner.Bytes())
-	}
-}
-
-func withFileRead(path string, fn func(line []byte)) {
-	f, err := os.Open(path)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-
+	totalChunks := 0
+	resultCh := make(chan stationData)
 	buf := make([]byte, fileReadBufSize)
 	leftOver := make([]byte, fileReadBufSize)
 	leftOverSize := 0
@@ -75,50 +60,53 @@ func withFileRead(path string, fn func(line []byte)) {
 			break
 		}
 
-		start := 0
-		for i := start; i < n; i++ {
+		lastNewlinePos := -1
+		for i := n - 1; i >= 0; i-- {
 			if buf[i] == '\n' {
-				if start == 0 {
-					// include leftover
-					copy(leftOver[leftOverSize:leftOverSize+i], buf[0:i])
-					line := leftOver[0 : leftOverSize+i]
-					fn(line)
-				} else {
-					line := buf[start:i]
-					fn(line)
-				}
-				start = i + 1
+				lastNewlinePos = i
+				break
 			}
 		}
 
-		if start < n {
-			leftOverSize = n - start
-			copy(leftOver[0:leftOverSize], buf[n-leftOverSize:])
-		} else {
-			leftOverSize = 0
-		}
+		chunk := make([]byte, lastNewlinePos+leftOverSize)
+		copy(chunk[0:leftOverSize], leftOver[0:leftOverSize])
+		copy(chunk[leftOverSize:leftOverSize+lastNewlinePos], buf[0:lastNewlinePos])
+
+		go func(data []byte, ch chan stationData) {
+			ch <- consumeChunk(data, useInt64)
+		}(chunk, resultCh)
+
+		leftOverSize = n - lastNewlinePos
+		copy(leftOver[0:leftOverSize], buf[lastNewlinePos:lastNewlinePos+leftOverSize])
+		totalChunks++
 	}
 
-	if leftOverSize > 0 {
-		line := leftOver[0:leftOverSize]
-		fn(line)
+	data := makeStationData(useInt64)
+	for i := 0; i < totalChunks; i++ {
+		other := <-resultCh
+		data.Merge(other)
 	}
+	close(resultCh)
+
+	return data
 }
 
-func execute(path string, useBufio, useInt64 bool, w io.Writer) {
+func execute(path string, useInt64 bool, w io.Writer) {
+	data := withFileReadParallel(path, useInt64)
+	output(data, w)
+}
+
+func consumeChunk(chunk []byte, useInt64 bool) stationData {
 	data := makeStationData(useInt64)
 
-	fn := func(line []byte) {
+	for _, line := range bytes.Split(chunk, []byte{'\n'}) {
+		if len(line) < 1 {
+			continue
+		}
 		data.ConsumeLine(line)
 	}
 
-	if useBufio {
-		withBufferedScanner(path, fn)
-	} else {
-		withFileRead(path, fn)
-	}
-
-	output(data, w)
+	return data
 }
 
 func startProfile() {
@@ -134,15 +122,6 @@ func startProfile() {
 
 func stopProfile() {
 	pprof.StopCPUProfile()
-}
-
-func makeScanner(file *os.File) *bufio.Scanner {
-	scanner := bufio.NewScanner(file)
-	const bufferSize = 1024 * 1024 * 8
-	buf := make([]byte, bufferSize)
-	scanner.Buffer(buf, bufferSize)
-
-	return scanner
 }
 
 func makeStationData(useInt64 bool) stationData {
@@ -180,8 +159,3 @@ func output(data stationData, w io.Writer) {
 	}
 	fmt.Fprint(w, "}")
 }
-
-// int64 + bufio = 38.277s
-// int64 + fileread = 35.982s
-// float64 + bufio = 40.643s
-// float64 + fileread = 39.208s

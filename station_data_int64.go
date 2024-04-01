@@ -42,6 +42,25 @@ func (sdf *stationDataInt64) ConsumeLine(line []byte) {
 	sdf.addReading(name, reading)
 }
 
+func (sdf *stationDataInt64) Merge(other stationData) {
+	switch o := other.(type) {
+	case *stationDataInt64:
+		for name, vals := range o.data {
+			existing, exists := sdf.data[name]
+			if exists {
+				existing.max = max(existing.max, vals.max)
+				existing.min = min(existing.min, vals.min)
+				existing.sum += vals.sum
+				existing.count += vals.count
+			} else {
+				sdf.data[name] = vals
+			}
+		}
+	default:
+		panic("not supported")
+	}
+}
+
 type valuesInt64 struct {
 	min   int64
 	max   int64
