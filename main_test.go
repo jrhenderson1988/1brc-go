@@ -12,12 +12,10 @@ func TestExecute(t *testing.T) {
 		panic(err)
 	}
 
-	for _, useInt64 := range []bool{true, false} {
-		buf := bytes.NewBufferString("")
-		execute("./test.txt", useInt64, buf)
-		result := buf.String()
-		if string(expected) != result {
-			t.Fatalf("Content did not match.\n  actual   = %s,\n  expected = %s", result, expected)
-		}
+	buf := bytes.NewBufferString("")
+	execute("./test.txt", buf)
+	result := buf.String()
+	if string(expected) != result {
+		t.Fatalf("Content did not match.\n  actual   = %s,\n  expected = %s", result, expected)
 	}
 }

@@ -14,35 +14,20 @@ import (
 
 const fileReadBufSize = 1024 * 1024 * 4
 
-type stationData interface {
-	StationNames() []string
-	ConsumeLine(line []byte)
-	ValuesOf(name string) values
-	Merge(other stationData)
-}
-
-type values interface {
-	Min() float64
-	Mean() float64
-	Max() float64
-}
-
 func main() {
 	startProfile()
 	defer stopProfile()
 
 	start := time.Now()
 
-	const useInt64 = true
-
-	execute("./measurements.txt", useInt64, os.Stdout)
+	execute("./measurements.txt", os.Stdout)
 
 	end := time.Now()
 	elapsed := end.Sub(start)
 	fmt.Printf("\n%s\n", elapsed)
 }
 
-func withFileReadParallel(path string, useInt64 bool) stationData {
+func withFileReadParallel(path string) *stationData {
 	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
@@ -50,7 +35,7 @@ func withFileReadParallel(path string, useInt64 bool) stationData {
 	defer f.Close()
 
 	totalChunks := 0
-	resultCh := make(chan stationData)
+	resultCh := make(chan *stationData)
 	buf := make([]byte, fileReadBufSize)
 	leftOver := make([]byte, fileReadBufSize)
 	leftOverSize := 0
@@ -72,8 +57,8 @@ func withFileReadParallel(path string, useInt64 bool) stationData {
 		copy(chunk[0:leftOverSize], leftOver[0:leftOverSize])
 		copy(chunk[leftOverSize:leftOverSize+lastNewlinePos], buf[0:lastNewlinePos])
 
-		go func(data []byte, ch chan stationData) {
-			ch <- consumeChunk(data, useInt64)
+		go func(data []byte, ch chan *stationData) {
+			ch <- consumeChunk(data)
 		}(chunk, resultCh)
 
 		leftOverSize = n - lastNewlinePos
@@ -81,7 +66,7 @@ func withFileReadParallel(path string, useInt64 bool) stationData {
 		totalChunks++
 	}
 
-	data := makeStationData(useInt64)
+	data := makeStationData()
 	for i := 0; i < totalChunks; i++ {
 		other := <-resultCh
 		data.Merge(other)
@@ -91,13 +76,13 @@ func withFileReadParallel(path string, useInt64 bool) stationData {
 	return data
 }
 
-func execute(path string, useInt64 bool, w io.Writer) {
-	data := withFileReadParallel(path, useInt64)
+func execute(path string, w io.Writer) {
+	data := withFileReadParallel(path)
 	output(data, w)
 }
 
-func consumeChunk(chunk []byte, useInt64 bool) stationData {
-	data := makeStationData(useInt64)
+func consumeChunk(chunk []byte) *stationData {
+	data := makeStationData()
 
 	for _, line := range bytes.Split(chunk, []byte{'\n'}) {
 		if len(line) < 1 {
@@ -124,12 +109,8 @@ func stopProfile() {
 	pprof.StopCPUProfile()
 }
 
-func makeStationData(useInt64 bool) stationData {
-	if useInt64 {
-		return newStationDataInt64()
-	} else {
-		return newStationDataFloat64()
-	}
+func makeStationData() *stationData {
+	return newStationData()
 }
 
 func getMapKeys[V any](m map[string]V) []string {
@@ -141,7 +122,7 @@ func getMapKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func output(data stationData, w io.Writer) {
+func output(data *stationData, w io.Writer) {
 	keys := data.StationNames()
 	slices.Sort(keys)
 
